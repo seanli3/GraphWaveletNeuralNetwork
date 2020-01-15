@@ -12,6 +12,7 @@ from scipy import sparse
 from texttable import Texttable
 from sklearn.preprocessing import normalize
 
+
 def tab_printer(args):
     """
     Function to print the logs in a nice tabular format.
@@ -24,6 +25,7 @@ def tab_printer(args):
     t.add_rows([[k.replace("_", " ").capitalize(), args[k]] for k in keys])
     print(t.draw())
 
+
 def graph_reader(path):
     """
     Function to create an NX graph object.
@@ -33,6 +35,7 @@ def graph_reader(path):
     graph = nx.from_edgelist(pd.read_csv(path).values.tolist())
     graph.remove_edges_from(nx.selfloop_edges(graph))
     return graph
+
 
 def feature_reader(path):
     """
@@ -52,6 +55,7 @@ def feature_reader(path):
                                  dtype=np.float32)
     return features
 
+
 def target_reader(path):
     """
     Reading thetarget vector to a numpy column vector.
@@ -60,6 +64,7 @@ def target_reader(path):
     """
     target = np.array(pd.read_csv(path)["target"])
     return target
+
 
 def save_logs(args, logs):
     """
@@ -70,10 +75,12 @@ def save_logs(args, logs):
     with open(args.log_path, "w") as f:
         json.dump(logs, f)
 
+
 class WaveletSparsifier(object):
     """
     Object to sparsify the wavelet coefficients for a graph.
     """
+
     def __init__(self, graph, scale, approximation_order, tolerance):
         """
         :param graph: NetworkX graph object.
@@ -112,15 +119,18 @@ class WaveletSparsifier(object):
         """
         print("\nNormalizing the sparsified wavelets.\n")
         for i, phi_matrix in enumerate(self.phi_matrices):
-            self.phi_matrices[i] = normalize(self.phi_matrices[i], norm='l1', axis=1)
+            self.phi_matrices[i] = normalize(
+                self.phi_matrices[i], norm='l1', axis=1)
 
     def calculate_density(self):
         """
         Calculating the density of the sparsified wavelet matrices.
         """
-        wavelet_density = len(self.phi_matrices[0].nonzero()[0])/(self.graph.number_of_nodes()**2)
+        wavelet_density = len(self.phi_matrices[0].nonzero()[
+                              0])/(self.graph.number_of_nodes()**2)
         wavelet_density = str(round(100*wavelet_density, 2))
-        inverse_wavelet_density = len(self.phi_matrices[1].nonzero()[0])/(self.graph.number_of_nodes()**2)
+        inverse_wavelet_density = len(self.phi_matrices[1].nonzero()[
+                                      0])/(self.graph.number_of_nodes()**2)
         inverse_wavelet_density = str(round(100*inverse_wavelet_density, 2))
         print("Density of wavelets: "+wavelet_density+"%.")
         print("Density of inverse wavelets: "+inverse_wavelet_density+"%.\n")
@@ -132,10 +142,10 @@ class WaveletSparsifier(object):
         print("\nWavelet calculation and sparsification started.\n")
         for i, scale in enumerate(self.scales):
             self.heat_filter = pygsp.filters.Heat(self.pygsp_graph,
-                                                  tau=[scale])
+                                                  scale=[scale])
             self.chebyshev = pygsp.filters.approximations.compute_cheby_coeff(self.heat_filter,
                                                                               m=self.approximation_order)
-            sparsified_wavelets = self.calculate_wavelet()          
+            sparsified_wavelets = self.calculate_wavelet()
             self.phi_matrices.append(sparsified_wavelets)
         self.normalize_matrices()
         self.calculate_density()
