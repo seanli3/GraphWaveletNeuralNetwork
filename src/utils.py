@@ -1,4 +1,7 @@
 """GWNN data reading utils."""
+import sys  # isort:skip
+import os  # isort:skip
+sys.path.insert(0, os.path.abspath('../pygsp'))  # noqa isort:skip
 
 import json
 import pygsp
