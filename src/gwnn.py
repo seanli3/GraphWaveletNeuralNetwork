@@ -1,8 +1,10 @@
 import time
 import torch
 from tqdm import trange
+from torch.nn import MultiheadAttention
 from sklearn.model_selection import train_test_split
 from gwnn_layer import SparseGraphWaveletLayer, DenseGraphWaveletLayer
+
 
 class GraphWaveletNeuralNetwork(torch.nn.Module):
     """
@@ -15,6 +17,7 @@ class GraphWaveletNeuralNetwork(torch.nn.Module):
     :param class_number: Number of classes.
     :param device: Device used for training.
     """
+
     def __init__(self, args, ncount, feature_number, class_number, device):
         super(GraphWaveletNeuralNetwork, self).__init__()
         self.args = args
@@ -38,35 +41,46 @@ class GraphWaveletNeuralNetwork(torch.nn.Module):
                                                     self.ncount,
                                                     self.device)
 
-    def forward(self, phi_indices, phi_values, phi_inverse_indices,
-                phi_inverse_values, feature_indices, feature_values):
+        self.attention = torch.nn.MultiheadAttention(7, 7)
+
+    def forward(self, phi_indices_list, phi_values_list, phi_inverse_indices_list,
+                phi_inverse_values_list, feature_indices, feature_values):
         """
         Forward propagation pass.
-        :param phi_indices: Sparse wavelet matrix index pairs.
-        :param phi_values: Sparse wavelet matrix values.
-        :param phi_inverse_indices: Inverse wavelet matrix index pairs.
-        :param phi_inverse_values: Inverse wavelet matrix values.
+        :param phi_indices_list: A list of sparse wavelet matrix index pairs.
+        :param phi_values_list: A list of sparse wavelet matrix values.
+        :param phi_inverse_indices_list: A list of Inverse wavelet matrix index pairs.
+        :param phi_inverse_values_list: A list of Inverse wavelet matrix values.
         :param feature_indices: Feature matrix index pairs.
         :param feature_values: Feature matrix values.
         :param predictions: Predicted node label vector.
         """
-        deep_features_1 = self.convolution_1(phi_indices,
-                                             phi_values,
-                                             phi_inverse_indices,
-                                             phi_inverse_values,
+        deep_features_1 = self.convolution_1(phi_indices_list,
+                                             phi_values_list,
+                                             phi_inverse_indices_list,
+                                             phi_inverse_values_list,
                                              feature_indices,
                                              feature_values,
                                              self.args.dropout)
 
-        deep_features_2 = self.convolution_2(phi_indices,
-                                             phi_values,
-                                             phi_inverse_indices,
-                                             phi_inverse_values,
+        deep_features_2 = self.convolution_2(phi_indices_list,
+                                             phi_values_list,
+                                             phi_inverse_indices_list,
+                                             phi_inverse_values_list,
                                              deep_features_1)
 
-        predictions = torch.nn.functional.log_softmax(deep_features_2, dim=1)
+        dropout_features = torch.nn.functional.dropout(deep_features_2,
+                                                       training=self.training,
+                                                       p=self.args.dropout)
+        attended_features, attended_features_weight = self.attention(
+            dropout_features, dropout_features, dropout_features)
+        print(attended_features.shape)
+        print(attended_features_weight.shape)
+
+        predictions = torch.nn.functional.log_softmax(attended_features, dim=2)
         return predictions
-        
+
+
 class GWNNTrainer(object):
     """
     Graph Wavelet Neural Network Trainer object.
@@ -75,12 +89,14 @@ class GWNNTrainer(object):
     :param features: Sparse feature matrix.
     :param target: Target vector.
     """
+
     def __init__(self, args, sparsifier, features, target):
         self.args = args
         self.sparsifier = sparsifier
         self.features = features
         self.target = target
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = torch.device(
+            "cuda" if torch.cuda.is_available() else "cpu")
         self.setup_logs()
         self.setup_features()
         self.setup_model()
@@ -91,7 +107,7 @@ class GWNNTrainer(object):
         Creating a log for performance measurements.
         """
         self.logs = dict()
-        self.logs["parameters"] =  vars(self.args)
+        self.logs["parameters"] = vars(self.args)
         self.logs["performance"] = [["Epoch", "Loss"]]
         self.logs["training_time"] = [["Epoch", "Seconds"]]
 
@@ -109,19 +125,27 @@ class GWNNTrainer(object):
         """
         Defining PyTorch tensors for sparse matrix multiplications.
         """
-        self.ncount = self.sparsifier.phi_matrices[0].shape[0]
+        self.ncount = self.sparsifier.phi_matrices[0][0].shape[0]
         self.feature_number = self.features.shape[1]
         self.class_number = max(self.target)+1
         self.target = torch.LongTensor(self.target).to(self.device)
-        self.feature_indices = torch.LongTensor([self.features.row, self.features.col])
+        self.feature_indices = torch.LongTensor(
+            [self.features.row, self.features.col])
         self.feature_indices = self.feature_indices.to(self.device)
-        self.feature_values = torch.FloatTensor(self.features.data).view(-1).to(self.device)
-        self.phi_indices = torch.LongTensor(self.sparsifier.phi_matrices[0].nonzero()).to(self.device)
-        self.phi_values = torch.FloatTensor(self.sparsifier.phi_matrices[0][self.sparsifier.phi_matrices[0].nonzero()])
-        self.phi_values = self.phi_values.view(-1).to(self.device)
-        self.phi_inverse_indices = torch.LongTensor(self.sparsifier.phi_matrices[1].nonzero()).to(self.device)
-        self.phi_inverse_values = torch.FloatTensor(self.sparsifier.phi_matrices[1][self.sparsifier.phi_matrices[1].nonzero()])
-        self.phi_inverse_values = self.phi_inverse_values.view(-1).to(self.device)
+        self.feature_values = torch.FloatTensor(
+            self.features.data).view(-1).to(self.device)
+        self.phi_indices_list = [torch.LongTensor(phi_matrices[0].nonzero()).to(
+            self.device) for _, phi_matrices in enumerate(self.sparsifier.phi_matrices)]
+        self.phi_values_list = [torch.FloatTensor(phi_matrices[0][phi_matrices[0].nonzero()]) if phi_matrices[0].getnnz(
+        ) else torch.FloatTensor() for _, phi_matrices in enumerate(self.sparsifier.phi_matrices)]
+        self.phi_values_list = [
+            phi_values.view(-1).to(self.device) for _, phi_values in enumerate(self.phi_values_list)]
+        self.phi_inverse_indices_list = [torch.LongTensor(phi_matrices[1].nonzero()).to(
+            self.device) for _, phi_matrices in enumerate(self.sparsifier.phi_matrices)]
+        self.phi_inverse_values_list = [torch.FloatTensor(phi_matrices[1][phi_matrices[1].nonzero()]) if phi_matrices[1].getnnz(
+        ) else torch.FloatTensor() for _, phi_matrices in enumerate(self.sparsifier.phi_matrices)]
+        self.phi_inverse_values_list = [phi_inverse_values.view(-1).to(
+            self.device) for _, phi_inverse_values in enumerate(self.phi_inverse_values_list)]
 
     def setup_model(self):
         """
@@ -144,7 +168,7 @@ class GWNNTrainer(object):
                                                    test_size=self.args.test_size,
                                                    random_state=self.args.seed)
 
-        self.train_nodes = torch.LongTensor(train_nodes) 
+        self.train_nodes = torch.LongTensor(train_nodes)
         self.test_nodes = torch.LongTensor(test_nodes)
 
     def fit(self):
@@ -161,10 +185,10 @@ class GWNNTrainer(object):
         for epoch in self.epochs:
             self.time = time.time()
             self.optimizer.zero_grad()
-            prediction = self.model(self.phi_indices,
-                                    self.phi_values,
-                                    self.phi_inverse_indices,
-                                    self.phi_inverse_values,
+            prediction = self.model(self.phi_indices_list,
+                                    self.phi_values_list,
+                                    self.phi_inverse_indices_list,
+                                    self.phi_inverse_values_list,
                                     self.feature_indices,
                                     self.feature_values)
 
@@ -180,14 +204,15 @@ class GWNNTrainer(object):
         """
         print("\nScoring.\n")
         self.model.eval()
-        _, prediction = self.model(self.phi_indices,
-                                   self.phi_values,
-                                   self.phi_inverse_indices,
-                                   self.phi_inverse_values,
+        _, prediction = self.model(self.phi_indices_list,
+                                   self.phi_values_list,
+                                   self.phi_inverse_indices_list,
+                                   self.phi_inverse_values_list,
                                    self.feature_indices,
                                    self.feature_values).max(dim=1)
 
-        correct = prediction[self.test_nodes].eq(self.target[self.test_nodes]).sum().item()
+        correct = prediction[self.test_nodes].eq(
+            self.target[self.test_nodes]).sum().item()
         accuracy = correct/int(self.ncount*self.args.test_size)
         print("Test Accuracy: {:.4f}".format(accuracy))
         self.logs["accuracy"] = accuracy

@@ -5,6 +5,7 @@ sys.path.insert(0, os.path.abspath('../pygsp'))  # noqa isort:skip
 
 import json
 import pygsp
+import torch
 import numpy as np
 import pandas as pd
 import networkx as nx
@@ -94,16 +95,16 @@ class WaveletSparsifier(object):
         self.scales = [-scale, scale]
         self.approximation_order = approximation_order
         self.tolerance = tolerance
-        self.phi_matrices = []
+        self.phi_matrices = [[] for i in range(5)]
 
-    def calculate_wavelet(self):
+    def calculate_wavelet(self, chebyshev):
         """
         Creating sparse wavelets.
         :return remaining_waves: Sparse matrix of attenuated wavelets.
         """
         impulse = np.eye(self.graph.number_of_nodes(), dtype=int)
         wavelet_coefficients = pygsp.filters.approximations.cheby_op(self.pygsp_graph,
-                                                                     self.chebyshev,
+                                                                     chebyshev,
                                                                      impulse)
         wavelet_coefficients[wavelet_coefficients < self.tolerance] = 0
         ind_1, ind_2 = wavelet_coefficients.nonzero()
@@ -118,22 +119,26 @@ class WaveletSparsifier(object):
         Normalizing the wavelet and inverse wavelet matrices.
         """
         print("\nNormalizing the sparsified wavelets.\n")
-        for i, phi_matrix in enumerate(self.phi_matrices):
-            self.phi_matrices[i] = normalize(
-                self.phi_matrices[i], norm='l1', axis=1)
+        for i, phi_matrix_list in enumerate(self.phi_matrices):
+            for j, _ in enumerate(phi_matrix_list):
+                self.phi_matrices[i][j] = normalize(
+                    self.phi_matrices[i][j], norm='l1', axis=1)
 
     def calculate_density(self):
         """
         Calculating the density of the sparsified wavelet matrices.
         """
-        wavelet_density = len(self.phi_matrices[0].nonzero()[
-                              0])/(self.graph.number_of_nodes()**2)
-        wavelet_density = str(round(100*wavelet_density, 2))
-        inverse_wavelet_density = len(self.phi_matrices[1].nonzero()[
-                                      0])/(self.graph.number_of_nodes()**2)
-        inverse_wavelet_density = str(round(100*inverse_wavelet_density, 2))
-        print("Density of wavelets: "+wavelet_density+"%.")
-        print("Density of inverse wavelets: "+inverse_wavelet_density+"%.\n")
+        for i, _ in enumerate(self.phi_matrices):
+            wavelet_density = len(self.phi_matrices[i][0].nonzero()[
+                                  0])/(self.graph.number_of_nodes()**2)
+            wavelet_density = str(round(100*wavelet_density, 2))
+            inverse_wavelet_density = len(self.phi_matrices[i][1].nonzero()[
+                                          0])/(self.graph.number_of_nodes()**2)
+            inverse_wavelet_density = str(
+                round(100*inverse_wavelet_density, 2))
+            print("Density of wavelets: "+wavelet_density+"%.")
+            print("Density of inverse wavelets: " +
+                  inverse_wavelet_density+"%.\n")
 
     def calculate_all_wavelets(self):
         """
@@ -141,11 +146,27 @@ class WaveletSparsifier(object):
         """
         print("\nWavelet calculation and sparsification started.\n")
         for i, scale in enumerate(self.scales):
-            self.heat_filter = pygsp.filters.Heat(self.pygsp_graph,
-                                                  scale=[scale])
-            self.chebyshev = pygsp.filters.approximations.compute_cheby_coeff(self.heat_filter,
-                                                                              m=self.approximation_order)
-            sparsified_wavelets = self.calculate_wavelet()
-            self.phi_matrices.append(sparsified_wavelets)
+            wavelet_filters = [
+                pygsp.filters.Abspline(self.pygsp_graph, Nf=1),
+                pygsp.filters.Expwin(self.pygsp_graph),
+                # pygsp.filters.Gabor(
+                #     self.pygsp_graph, pygsp.filters.Filter(
+                #         self.pygsp_graph, lambda x: x / (1. - x))),
+                # pygsp.filters.HalfCosine(self.pygsp_graph, Nf=1),
+                pygsp.filters.Heat(self.pygsp_graph, scale=[scale]),
+                # pygsp.filters.Held(self.pygsp_graph),
+                pygsp.filters.Itersine(self.pygsp_graph, Nf=1),
+                pygsp.filters.MexicanHat(self.pygsp_graph, Nf=1),
+                # pygsp.filters.Meyer(self.pygsp_graph, Nf=1),
+                # pygsp.filters.Papadakis(self.pygsp_graph),
+                # pygsp.filters.Regular(self.pygsp_graph),
+                # pygsp.filters.Simoncelli(self.pygsp_graph),
+                # pygsp.filters.SimpleTight(self.pygsp_graph, Nf=1),
+            ]
+            for j, wavelet_filter in enumerate(wavelet_filters):
+                chebyshev = pygsp.filters.approximations.compute_cheby_coeff(
+                    wavelet_filter, m=self.approximation_order)
+                sparsified_wavelets = self.calculate_wavelet(chebyshev)
+                self.phi_matrices[j].append(sparsified_wavelets)
         self.normalize_matrices()
         self.calculate_density()
