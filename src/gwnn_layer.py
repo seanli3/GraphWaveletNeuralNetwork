@@ -69,7 +69,7 @@ class SparseGraphWaveletLayer(GraphWaveletLayer):
                                  self.weight_matrix)
 
         localized_features_list = torch.empty(
-            len(phi_indices_list), self.ncount, self.out_channels, dtype=float)
+            self.ncount, len(phi_indices_list), self.out_channels, dtype=float)
 
         for i, _ in enumerate(phi_indices_list):
             rescaled_phi_indices, rescaled_phi_values = spspmm(phi_indices_list[i],
@@ -94,7 +94,7 @@ class SparseGraphWaveletLayer(GraphWaveletLayer):
                                       self.ncount,
                                       filtered_features)
 
-            localized_features_list[i] = localized_features
+            localized_features_list[:, i, :] = localized_features
 
         dropout_features = torch.nn.functional.dropout(torch.nn.functional.relu(localized_features_list),
                                                        training=self.training,
@@ -119,7 +119,7 @@ class DenseGraphWaveletLayer(GraphWaveletLayer):
         """
 
         localized_features_list = torch.empty(
-            len(phi_indices_list), self.ncount, self.out_channels, dtype=float)
+            self.ncount, len(phi_indices_list), self.out_channels, dtype=float)
 
         for i, _ in enumerate(phi_indices_list):
             rescaled_phi_indices, rescaled_phi_values = spspmm(phi_indices_list[i],
@@ -140,7 +140,7 @@ class DenseGraphWaveletLayer(GraphWaveletLayer):
                                                              self.ncount)
 
             filtered_features = torch.mm(
-                features[i], self.weight_matrix.double())
+                features[:, i, :].float(), self.weight_matrix)
 
             localized_features = spmm(phi_product_indices,
                                       phi_product_values,
@@ -148,6 +148,56 @@ class DenseGraphWaveletLayer(GraphWaveletLayer):
                                       self.ncount,
                                       filtered_features)
 
-            localized_features_list[i] = localized_features
+            localized_features_list[:, i, :] = localized_features
 
         return localized_features_list
+
+
+class Attention(torch.nn.Module):
+    """
+    Computes a weighted average of channels across timesteps (1 parameter pr. channel).
+    """
+
+    def __init__(self, attention_size, return_attention=False):
+        """ Initialize the attention layer
+        # Arguments:
+            attention_size: Size of the attention vector.
+            return_attention: If true, output will include the weight for each input token
+                              used for the prediction
+        """
+        super(Attention, self).__init__()
+        self.return_attention = return_attention
+        self.attention_size = attention_size
+        self.attention_vector = torch.nn.Parameter(
+            torch.FloatTensor(attention_size))
+
+    def __repr__(self):
+        s = '{name}({attention_size}, return attention={return_attention})'
+        return s.format(name=self.__class__.__name__, **self.__dict__)
+
+    def forward(self, inputs):
+        """ Forward pass.
+        # Arguments:
+            inputs (Torch.Variable): Tensor of input sequences
+        # Return:
+            Tuple with (representations and attentions if self.return_attention else None).
+        """
+        logits = inputs.matmul(self.attention_vector)
+        unnorm_ai = (logits - logits.max()).exp()
+
+        # apply mask and renormalize attention scores (weights)
+        masked_weights = unnorm_ai
+        att_sums = masked_weights.sum(
+            dim=1, keepdim=True)  # sums per sequence
+
+        attentions = masked_weights.div(att_sums)
+
+        # get the final fixed vector representations of the sentences
+        # apply attention weights
+        weighted = torch.mul(
+            inputs, attentions.unsqueeze(-1).expand_as(inputs))
+
+        # get the final fixed vector representations of the sentences
+        representations = weighted.sum(dim=1)
+
+        return (representations, attentions if self.return_attention else None)

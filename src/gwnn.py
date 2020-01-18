@@ -3,7 +3,7 @@ import torch
 from tqdm import trange
 from torch.nn import MultiheadAttention
 from sklearn.model_selection import train_test_split
-from gwnn_layer import SparseGraphWaveletLayer, DenseGraphWaveletLayer
+from gwnn_layer import SparseGraphWaveletLayer, DenseGraphWaveletLayer, Attention
 
 
 class GraphWaveletNeuralNetwork(torch.nn.Module):
@@ -25,6 +25,7 @@ class GraphWaveletNeuralNetwork(torch.nn.Module):
         self.feature_number = feature_number
         self.class_number = class_number
         self.device = device
+        self.attention_dim = 7
         self.setup_layers()
 
     def setup_layers(self):
@@ -41,7 +42,7 @@ class GraphWaveletNeuralNetwork(torch.nn.Module):
                                                     self.ncount,
                                                     self.device)
 
-        self.attention = torch.nn.MultiheadAttention(7, 7)
+        self.attention = Attention(self.attention_dim, True)
 
     def forward(self, phi_indices_list, phi_values_list, phi_inverse_indices_list,
                 phi_inverse_values_list, feature_indices, feature_values):
@@ -69,15 +70,15 @@ class GraphWaveletNeuralNetwork(torch.nn.Module):
                                              phi_inverse_values_list,
                                              deep_features_1)
 
-        dropout_features = torch.nn.functional.dropout(deep_features_2,
-                                                       training=self.training,
-                                                       p=self.args.dropout)
+        # dropout_features = torch.nn.functional.dropout(deep_features_2,
+        #                                                training=self.training,
+        #                                                p=self.args.dropout)
+        # dropout_features = dropout_features.float()
+        deep_features_2 = deep_features_2.float()
         attended_features, attended_features_weight = self.attention(
-            dropout_features, dropout_features, dropout_features)
-        print(attended_features.shape)
-        print(attended_features_weight.shape)
+            deep_features_2)
 
-        predictions = torch.nn.functional.log_softmax(attended_features, dim=2)
+        predictions = torch.nn.functional.log_softmax(attended_features, dim=1)
         return predictions
 
 

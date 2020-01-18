@@ -20,8 +20,8 @@ def main():
     sparsifier.calculate_all_wavelets()
     trainer = GWNNTrainer(args, sparsifier, features, target)
     trainer.fit()
-    # trainer.score()
-    # save_logs(args, trainer.logs)
+    trainer.score()
+    save_logs(args, trainer.logs)
 
 
 if __name__ == "__main__":
